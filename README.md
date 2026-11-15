@@ -20,6 +20,18 @@ ios/      SwiftUI app (project.yml → XcodeGen)
 6. **Health Check** path: `/health`. → **Deploy**.
 7. Yoxla: `curl https://DOMAIN/health`
 
+### YouTube "Sign in to confirm you're not a bot" (Hetzner IP bloku)
+
+Server cookies faylı ilə işləyəndə YouTube onu bot saymır:
+
+1. **Ayrıca, əsas olmayan** bir Google/YouTube hesabı istifadə et (bloklansa itki olmasın).
+2. Chrome-a **"Get cookies.txt LOCALLY"** əlavəsini qur, onu Incognito-da işləməyə icazə ver.
+3. **Incognito pəncərə** aç → youtube.com-a həmin hesabla daxil ol → eyni tabda `https://www.youtube.com/robots.txt` aç → əlavə ilə **Export** et (Netscape formatı) → **Incognito pəncərəni bağla** (YouTube açıq tabdakı cookies-i tez dəyişir).
+4. Coolify → resurs → **Persistent Storage** → **+ Add** → **File Mount**: Destination path `/data/cookies/cookies.txt`, Content: faylın məzmunu → Save → **Restart**.
+5. Logda `cookies: loaded from /data/cookies/cookies.txt` görünməlidir.
+
+Cookies bir neçə həftədən sonra köhnələ bilər — xəta qayıtsa, 3–4-cü addımı təkrarla.
+
 Repo olmadan: `server/Dockerfile.coolify` faylını Coolify-ın **Dockerfile** resursuna yapışdırmaq da olar (kodu `server/build-coolify-dockerfile.sh` yaradır).
 
 ## 1b. Server — Docker Compose + Caddy ilə (Coolify-siz)

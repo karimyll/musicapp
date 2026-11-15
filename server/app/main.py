@@ -18,10 +18,24 @@ API_TOKEN = os.environ.get("API_TOKEN", "")
 CACHE_DIR = Path(os.environ.get("CACHE_DIR", "/data/cache"))
 CACHE_MAX_BYTES = int(float(os.environ.get("CACHE_MAX_GB", "2")) * 1024**3)
 CACHE_TTL_SECONDS = int(float(os.environ.get("CACHE_TTL_HOURS", "24")) * 3600)
-COOKIES_FILE = os.environ.get("COOKIES_FILE", "")
+COOKIES_FILE = os.environ.get("COOKIES_FILE", "/data/cookies/cookies.txt")
+# yt-dlp rewrites the cookie jar after each request; mounted files may be read-only, so work on a copy.
+COOKIES_WORK = Path("/tmp/yt-cookies.txt")
 
 if not API_TOKEN:
     raise RuntimeError("API_TOKEN env var is required")
+
+
+def _cookie_file() -> str | None:
+    src = Path(COOKIES_FILE)
+    if not src.is_file() or src.stat().st_size == 0:
+        return None
+    if not COOKIES_WORK.exists() or src.stat().st_mtime > COOKIES_WORK.stat().st_mtime:
+        shutil.copyfile(src, COOKIES_WORK)
+    return str(COOKIES_WORK)
+
+
+print(f"cookies: {'loaded from ' + COOKIES_FILE if _cookie_file() else 'none'}", flush=True)
 
 if not shutil.which("ffmpeg"):
     # Without ffmpeg yt-dlp can't fix YouTube's DASH m4a container (wrong duration/seeking on iOS).
@@ -153,8 +167,8 @@ def _download(video_id: str) -> Path:
         "format": "bestaudio[ext=m4a]/bestaudio",
         "outtmpl": str(CACHE_DIR / f"{video_id}.%(ext)s"),
     }
-    if COOKIES_FILE and Path(COOKIES_FILE).exists():
-        opts["cookiefile"] = COOKIES_FILE
+    if cookies := _cookie_file():
+        opts["cookiefile"] = cookies
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=True)
         downloaded = Path(ydl.prepare_filename(info))
@@ -180,7 +194,14 @@ def audio(video_id: str) -> FileResponse:
         try:
             path = _download(video_id)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"download failed: {e}") from e
+            msg = str(e)
+            if "confirm you" in msg and "not a bot" in msg:
+                msg = ("YouTube blocked the server (bot check). Add a cookies.txt from a spare "
+                       "YouTube account in Coolify — see README.")
+            elif "Video unavailable" in msg or "Private video" in msg:
+                msg = "This video is unavailable."
+            # 424 (not 502) so proxies like Cloudflare pass our JSON error through to the app.
+            raise HTTPException(status_code=424, detail=msg) from e
     try:
         _cleanup_cache()
     except Exception:
