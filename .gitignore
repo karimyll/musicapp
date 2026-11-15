@@ -1,0 +1,9 @@
+server/.env
+server/cookies/
+server/.venv/
+server/cache/
+__pycache__/
+ios/*.xcodeproj
+ios/build/
+DerivedData/
+.DS_Store
