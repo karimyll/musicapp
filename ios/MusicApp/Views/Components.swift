@@ -2,14 +2,28 @@ import SwiftData
 import SwiftUI
 
 struct ArtworkView: View {
-    var track: Track?
-    var remoteURL: String? = nil
-    var size: CGFloat = 48
-    var cornerRadius: CGFloat = 6
+    var localURL: URL?
+    var remoteURL: String?
+    var size: CGFloat
+    var cornerRadius: CGFloat
+
+    init(track: Track?, remoteURL: String? = nil, size: CGFloat = 48, cornerRadius: CGFloat = 6) {
+        localURL = track?.artworkURL
+        self.remoteURL = remoteURL
+        self.size = size
+        self.cornerRadius = cornerRadius
+    }
+
+    init(item: PlayItem?, size: CGFloat = 48, cornerRadius: CGFloat = 6) {
+        localURL = item?.localArtwork
+        remoteURL = item?.remoteArtwork
+        self.size = size
+        self.cornerRadius = cornerRadius
+    }
 
     var body: some View {
         Group {
-            if let url = track?.artworkURL, let image = UIImage(contentsOfFile: url.path) {
+            if let url = localURL, let image = UIImage(contentsOfFile: url.path) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else if let remoteURL, let url = URL(string: remoteURL) {
                 AsyncImage(url: url) { phase in
@@ -47,7 +61,7 @@ struct TrackRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
                     .lineLimit(1)
-                    .foregroundStyle(player.current?.videoId == track.videoId ? Color.accentColor : .primary)
+                    .foregroundStyle(player.current?.id == track.videoId ? Color.accentColor : .primary)
                 Text(track.artist)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -75,7 +89,7 @@ struct TrackMenu: View {
     @Environment(\.modelContext) private var context
 
     var body: some View {
-        Button { player.playNext(track) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+        Button { player.playNext(PlayItem(track: track)) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
         Button { addToPlaylist = track } label: { Label("Add to Playlist", systemImage: "text.badge.plus") }
         if let removeFromPlaylist {
             Button(role: .destructive, action: removeFromPlaylist) { Label("Remove from Playlist", systemImage: "minus.circle") }

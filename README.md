@@ -19,7 +19,9 @@ Songs come from YouTube. A small server that **you** run does the downloading, a
 ## Features
 
 - **Search** songs and artists (results come from YouTube Music, with covers)
+- **Stream** — tap a song to play it right away, no download needed
 - **Download** with one tap — songs stay on your phone and play **offline**
+- **Autoplay** — when your queue ends, similar songs keep playing (∞ button in the queue)
 - **Library** with search, **Favorites** (star a song) and swipe to delete
 - **Playlists** — create, rename, add songs, drag to reorder
 - **Player** — colorful background from the cover, shuffle, repeat, "Playing Next" queue, volume bar, AirPlay
@@ -36,7 +38,7 @@ flowchart LR
     B -- asks --> C[YouTube Music]
     C -- song list --> B
     B -- results --> A
-    A -- "download song X" --> B
+    A -- "play / download song X" --> B
     B -- "yt-dlp downloads audio" --> D[YouTube]
     B -- ".m4a file" --> A
     A -- "saved on phone, plays offline" --> A
@@ -44,8 +46,9 @@ flowchart LR
 
 1. You type a song name in the app. The app asks **your server**.
 2. The server searches **YouTube Music** and sends back the results (title, artist, cover).
-3. You tap a song. The server downloads the audio with **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** and sends the file to your phone.
-4. The app saves the file on your phone. From now on it plays **without internet**.
+3. You tap a song. The server gets the audio with **[yt-dlp](https://github.com/yt-dlp/yt-dlp)** and the app **streams** it (starts in a few seconds).
+4. Tap **⬇︎** to keep a song: the app saves the file on your phone, and from now on it plays **without internet**.
+5. When the queue ends, the app asks the server for **similar songs** (YouTube Music radio) and keeps playing.
 
 The server only keeps songs for a short time (cache), so it needs very little disk space. Every request needs a secret **token**, so nobody else can use your server.
 
@@ -198,7 +201,9 @@ With a free Apple ID, the installed app works for **7 days**. After that, connec
 2. **Server URL:** `https://music.yourdomain.com`
 3. **API token:** the same token you put on the server.
 4. Tap **Test Connection**. You should see **✅ Connected**.
-5. Go to **Search** (magnifier, bottom right), find a song, tap the **⬇︎** button. When it turns into a green ✓, the song is on your phone.
+5. Go to **Search** (magnifier, bottom right) and find a song.
+   - **Tap the song** to listen right away (streaming).
+   - **Tap ⬇︎** to download it. When it turns into a green ✓, the song is on your phone and works offline.
 
 ---
 
@@ -249,7 +254,9 @@ Server endpoints (all except `/health` need the header `Authorization: Bearer <t
 
 - `GET /health` — is the server alive?
 - `GET /search?q=<text>` — search songs
-- `GET /audio/<videoId>` — get the song as `.m4a`
+- `GET /audio/<videoId>` — get the song as `.m4a` (used for streaming and downloading)
+- `GET /radio/<videoId>` — similar songs (Autoplay)
+- `GET /search?q=<text>&type=albums`, `GET /album/<id>`, `GET /playlist?url=<link>` — albums and playlist links (server side is ready; not in the app yet)
 
 ---
 

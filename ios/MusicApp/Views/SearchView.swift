@@ -81,8 +81,15 @@ struct SearchView: View {
             trailing(r, track: track)
         }
         .contentShape(Rectangle())
-        .onTapGesture {
-            if let track { player.play([track]) } else { startDownload(r) }
+        // Tap plays right away: from the phone if downloaded, otherwise streamed from the server.
+        .onTapGesture { player.play([PlayItem(result: r)]) }
+        .contextMenu {
+            Button { player.playNext(PlayItem(result: r)) } label: {
+                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
+            }
+            if track == nil {
+                Button { startDownload(r) } label: { Label("Download", systemImage: "arrow.down.circle") }
+            }
         }
     }
 

@@ -67,24 +67,48 @@ def _best_thumb(thumbs: list[dict] | None) -> str | None:
     return url
 
 
+def _parse_length(s: str | None) -> int | None:
+    """'3:21' or '1:02:03' -> seconds."""
+    if not s or not re.fullmatch(r"\d+(:\d{1,2}){1,2}", s):
+        return None
+    secs = 0
+    for part in s.split(":"):
+        secs = secs * 60 + int(part)
+    return secs
+
+
+def _artists(r: dict) -> str:
+    return ", ".join(a["name"] for a in r.get("artists") or [] if a.get("name"))
+
+
+def _song(r: dict, album: str | None = None, thumb: str | None = None) -> dict | None:
+    """Normalize a ytmusicapi track (search / playlist / album / watch) to the app's song shape."""
+    vid = r.get("videoId")
+    if not vid or not VIDEO_ID_RE.match(vid):
+        return None
+    alb = r.get("album")
+    return {
+        "id": vid,
+        "title": r.get("title") or "",
+        "artist": _artists(r),
+        "album": (alb.get("name") if isinstance(alb, dict) else alb) or album,
+        "duration": r.get("duration_seconds") or _parse_length(r.get("duration") or r.get("length")),
+        "thumbnail": _best_thumb(r.get("thumbnails") or r.get("thumbnail")) or thumb,
+    }
+
+
+def _songs(items: list[dict], album: str | None = None, thumb: str | None = None) -> list[dict]:
+    out, seen = [], set()
+    for r in items or []:
+        s = _song(r, album, thumb)
+        if s and s["id"] not in seen:
+            seen.add(s["id"])
+            out.append(s)
+    return out
+
+
 def _search_ytmusic(q: str, limit: int) -> list[dict]:
-    results = ytmusic.search(q, filter="songs", limit=limit)
-    out = []
-    for r in results:
-        vid = r.get("videoId")
-        if not vid:
-            continue
-        out.append(
-            {
-                "id": vid,
-                "title": r.get("title") or "",
-                "artist": ", ".join(a["name"] for a in r.get("artists") or [] if a.get("name")),
-                "album": (r.get("album") or {}).get("name"),
-                "duration": r.get("duration_seconds"),
-                "thumbnail": _best_thumb(r.get("thumbnails")),
-            }
-        )
-    return out[:limit]
+    return _songs(ytmusic.search(q, filter="songs", limit=limit))[:limit]
 
 
 def _search_youtube(q: str, limit: int) -> list[dict]:
@@ -115,7 +139,27 @@ def health() -> dict:
 
 
 @app.get("/search", dependencies=[Depends(require_token)])
-def search(q: str = Query(min_length=1, max_length=200), limit: int = Query(20, ge=1, le=50)) -> list[dict]:
+def search(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(20, ge=1, le=50),
+    type: str = Query("songs", pattern="^(songs|albums)$"),
+) -> list[dict]:
+    if type == "albums":
+        try:
+            results = ytmusic.search(q, filter="albums", limit=limit)
+        except Exception as e:
+            raise HTTPException(status_code=424, detail=f"search failed: {e}") from e
+        return [
+            {
+                "id": r["browseId"],
+                "title": r.get("title") or "",
+                "artist": _artists(r) or r.get("artist") or "",
+                "year": r.get("year"),
+                "thumbnail": _best_thumb(r.get("thumbnails")),
+            }
+            for r in results
+            if r.get("browseId")
+        ][:limit]
     try:
         results = _search_ytmusic(q, limit)
     except Exception:
@@ -126,6 +170,89 @@ def search(q: str = Query(min_length=1, max_length=200), limit: int = Query(20, 
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"search failed: {e}") from e
     return results
+
+
+BROWSE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,80}$")
+
+
+def _collection(title: str, author: str, thumb: str | None, tracks: list[dict], year=None) -> dict:
+    return {"title": title, "author": author, "year": year, "thumbnail": thumb, "tracks": tracks}
+
+
+def _album(browse_id: str) -> dict:
+    a = ytmusic.get_album(browse_id)
+    thumb = _best_thumb(a.get("thumbnails"))
+    return _collection(a.get("title") or "", _artists(a), thumb,
+                       _songs(a.get("tracks"), album=a.get("title"), thumb=thumb), a.get("year"))
+
+
+@app.get("/radio/{video_id}", dependencies=[Depends(require_token)])
+def radio(video_id: str, limit: int = Query(25, ge=1, le=50)) -> list[dict]:
+    """Songs similar to video_id (YouTube Music 'radio'), without the seed song itself."""
+    if not VIDEO_ID_RE.match(video_id):
+        raise HTTPException(status_code=400, detail="bad video id")
+    try:
+        w = ytmusic.get_watch_playlist(videoId=video_id, radio=True, limit=limit + 1)
+    except Exception as e:
+        raise HTTPException(status_code=424, detail=f"radio failed: {e}") from e
+    return [s for s in _songs(w.get("tracks")) if s["id"] != video_id][:limit]
+
+
+@app.get("/album/{browse_id}", dependencies=[Depends(require_token)])
+def album(browse_id: str) -> dict:
+    if not BROWSE_ID_RE.match(browse_id):
+        raise HTTPException(status_code=400, detail="bad album id")
+    try:
+        return _album(browse_id)
+    except Exception as e:
+        raise HTTPException(status_code=424, detail=f"album failed: {e}") from e
+
+
+@app.get("/playlist", dependencies=[Depends(require_token)])
+def playlist(url: str = Query(min_length=2, max_length=500)) -> dict:
+    """Import a YouTube / YouTube Music playlist or album from a link (or a raw id)."""
+    url = url.strip()
+    m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", url)
+    pid = m.group(1) if m else None
+    b = re.search(r"/browse/([A-Za-z0-9_-]+)", url)
+    if not pid and b:
+        bid = b.group(1)
+        if bid.startswith("MPREb"):
+            try:
+                return _album(bid)
+            except Exception as e:
+                raise HTTPException(status_code=424, detail=f"album failed: {e}") from e
+        pid = bid[2:] if bid.startswith("VL") else bid
+    if not pid and BROWSE_ID_RE.match(url):
+        pid = url
+    if not pid:
+        raise HTTPException(status_code=400, detail="Not a YouTube playlist or album link.")
+    try:
+        if pid.startswith("RD"):  # auto-generated mixes
+            w = ytmusic.get_watch_playlist(playlistId=pid, limit=100)
+            tracks = _songs(w.get("tracks"))
+            return _collection("Mix", "YouTube", tracks[0]["thumbnail"] if tracks else None, tracks)
+        p = ytmusic.get_playlist(pid, limit=500)
+        author = p.get("author")
+        author = author.get("name") if isinstance(author, dict) else (author or "")
+        return _collection(p.get("title") or "Playlist", author, _best_thumb(p.get("thumbnails")),
+                           _songs(p.get("tracks")), p.get("year"))
+    except Exception:
+        pass
+    # Fallback for playlists YouTube Music can't read: plain YouTube via yt-dlp.
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "skip_download": True}) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/playlist?list={pid}", download=False)
+    except Exception as e:
+        raise HTTPException(status_code=424, detail="Couldn't read this playlist. Is it public?") from e
+    tracks = [
+        {"id": e["id"], "title": e.get("title") or "", "artist": e.get("channel") or e.get("uploader") or "",
+         "album": None, "duration": int(e["duration"]) if e.get("duration") else None,
+         "thumbnail": f"https://i.ytimg.com/vi/{e['id']}/hqdefault.jpg"}
+        for e in info.get("entries") or [] if e.get("id") and VIDEO_ID_RE.match(e["id"])
+    ]
+    return _collection(info.get("title") or "Playlist", info.get("uploader") or "",
+                       tracks[0]["thumbnail"] if tracks else None, tracks)
 
 
 def _lock_for(video_id: str) -> threading.Lock:

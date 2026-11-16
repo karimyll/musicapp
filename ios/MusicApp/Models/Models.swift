@@ -12,6 +12,8 @@ final class Track {
     var fileName: String
     var artworkFileName: String?
     var addedAt: Date
+    /// Lyrics from LRCLIB: LRC text (synced) or plain text; "" = looked up, none found.
+    var lyrics: String?
     var isFavorite: Bool = false
 
     @Relationship(deleteRule: .cascade, inverse: \PlaylistItem.track)
@@ -51,8 +53,8 @@ final class Playlist {
 
     var tracks: [Track] { orderedItems.compactMap(\.track) }
 
-    func append(_ track: Track) {
-        let next = (items.map(\.order).max() ?? -1) + 1
+    func append(_ track: Track, order: Int? = nil) {
+        let next = order ?? ((items.map(\.order).max() ?? -1) + 1)
         let item = PlaylistItem(order: next)
         item.track = track
         items.append(item)

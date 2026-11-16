@@ -13,7 +13,8 @@ struct MiniPlayerView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ArtworkView(track: player.current, size: 32, cornerRadius: 8)
+            ArtworkView(item: player.current, size: 32, cornerRadius: 8)
+                .id(player.current?.id)
             VStack(alignment: .leading, spacing: 0) {
                 Text(player.current?.title ?? "Not Playing")
                     .font(.subheadline.weight(.semibold))
@@ -51,31 +52,38 @@ struct MiniPlayerView: View {
 
 struct NowPlayingView: View {
     @Environment(PlayerEngine.self) private var player
+    @Environment(AppSettings.self) private var settings
+    @Environment(DownloadManager.self) private var downloads
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
+    @Query private var tracks: [Track]
     @Namespace private var ns
     @State private var showQueue = false
     @State private var addToPlaylist: Track?
 
+    /// The downloaded Track for the current song, if it's on the phone.
+    private func downloaded(_ item: PlayItem) -> Track? { tracks.first { $0.videoId == item.id } }
+
     var body: some View {
         ZStack {
-            NowPlayingBackground(track: player.current)
-            if let track = player.current {
+            NowPlayingBackground(item: player.current)
+            if let item = player.current {
                 VStack(spacing: 0) {
                     if showQueue {
-                        compactHeader(track)
+                        compactHeader(item)
                             .padding(.top, 28)
                         QueueSection()
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     } else {
                         Spacer(minLength: 20)
-                        ArtworkView(track: track, size: 330, cornerRadius: 14)
+                        ArtworkView(item: item, size: 330, cornerRadius: 14)
+                            .id(item.id)
                             .matchedGeometryEffect(id: "art", in: ns)
                             .shadow(color: .black.opacity(0.35), radius: 30, y: 16)
                             .scaleEffect(player.isPlaying ? 1 : 0.84)
                             .animation(.spring(duration: 0.5, bounce: 0.3), value: player.isPlaying)
                         Spacer(minLength: 20)
-                        titleRow(track)
+                        titleRow(item)
                     }
                     Scrubber()
                         .padding(.top, 18)
@@ -97,58 +105,93 @@ struct NowPlayingView: View {
         .onChange(of: player.current == nil) { _, isEmpty in if isEmpty { dismiss() } }
     }
 
-    private func titleRow(_ track: Track) -> some View {
+    private func titleRow(_ item: PlayItem) -> some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title)
+                Text(item.title)
                     .font(.title3.weight(.bold))
                     .lineLimit(1)
-                Text(track.artist)
+                Text(item.artist)
                     .font(.title3)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
             }
             Spacer()
-            favoriteButton(track)
-            moreMenu(track)
+            keepButton(item)
+            moreMenu(item)
         }
     }
 
-    private func compactHeader(_ track: Track) -> some View {
+    private func compactHeader(_ item: PlayItem) -> some View {
         HStack(spacing: 14) {
-            ArtworkView(track: track, size: 64, cornerRadius: 8)
+            ArtworkView(item: item, size: 64, cornerRadius: 8)
+                .id(item.id)
                 .matchedGeometryEffect(id: "art", in: ns)
                 .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
             VStack(alignment: .leading, spacing: 2) {
-                Text(track.title).font(.headline).lineLimit(1)
-                Text(track.artist).font(.subheadline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
+                Text(item.title).font(.headline).lineLimit(1)
+                Text(item.artist).font(.subheadline).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
             }
             Spacer()
-            favoriteButton(track)
-            moreMenu(track)
+            keepButton(item)
+            moreMenu(item)
         }
     }
 
-    private func favoriteButton(_ track: Track) -> some View {
-        Button {
-            track.isFavorite.toggle()
-            try? context.save()
-        } label: {
-            Image(systemName: track.isFavorite ? "star.fill" : "star")
-                .font(.body.weight(.semibold))
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 34, height: 34)
-                .background(.white.opacity(0.14), in: Circle())
+    /// Star for downloaded songs; for streamed songs a download button (with progress).
+    @ViewBuilder
+    private func keepButton(_ item: PlayItem) -> some View {
+        if let track = downloaded(item) {
+            Button {
+                track.isFavorite.toggle()
+                try? context.save()
+            } label: {
+                Image(systemName: track.isFavorite ? "star.fill" : "star")
+                    .font(.body.weight(.semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.14), in: Circle())
+            }
+            .sensoryFeedback(.selection, trigger: track.isFavorite)
+        } else if let p = downloads.active[item.id] {
+            ZStack {
+                Circle().fill(.white.opacity(0.14))
+                if p > 0 {
+                    Circle().trim(from: 0, to: p)
+                        .stroke(.white, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .padding(6)
+                } else {
+                    ProgressView().controlSize(.small).tint(.white)
+                }
+            }
+            .frame(width: 34, height: 34)
+        } else {
+            Button { download(item) } label: {
+                Image(systemName: "arrow.down")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 34, height: 34)
+                    .background(.white.opacity(0.14), in: Circle())
+            }
         }
-        .sensoryFeedback(.selection, trigger: track.isFavorite)
     }
 
-    private func moreMenu(_ track: Track) -> some View {
+    private func download(_ item: PlayItem) {
+        guard let api = settings.api else { return }
+        downloads.download(item.searchResult, api: api, context: context)
+    }
+
+    private func moreMenu(_ item: PlayItem) -> some View {
         Menu {
-            Button { addToPlaylist = track } label: { Label("Add to Playlist", systemImage: "text.badge.plus") }
-            Button(role: .destructive) {
-                deleteTrack(track, player: player, context: context)
-            } label: { Label("Delete from Phone", systemImage: "trash") }
+            if let track = downloaded(item) {
+                Button { addToPlaylist = track } label: { Label("Add to Playlist", systemImage: "text.badge.plus") }
+                Button(role: .destructive) {
+                    deleteTrack(track, player: player, context: context)
+                } label: { Label("Delete from Phone", systemImage: "trash") }
+            } else {
+                Button { download(item) } label: { Label("Download", systemImage: "arrow.down.circle") }
+                    .disabled(downloads.isDownloading(item.id))
+            }
         } label: {
             Image(systemName: "ellipsis")
                 .font(.body.weight(.semibold))
@@ -179,13 +222,14 @@ struct NowPlayingView: View {
 
 /// Blurred, saturated cover as a colorful gradient, like Apple Music.
 private struct NowPlayingBackground: View {
-    let track: Track?
+    let item: PlayItem?
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 Color.black
-                ArtworkView(track: track, size: max(geo.size.width, geo.size.height), cornerRadius: 0)
+                ArtworkView(item: item, size: max(geo.size.width, geo.size.height), cornerRadius: 0)
+                    .id(item?.id)
                     .frame(width: geo.size.width, height: geo.size.height)
                     .blur(radius: 90)
                     .saturation(1.7)
@@ -196,7 +240,7 @@ private struct NowPlayingBackground: View {
             }
         }
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.6), value: track?.videoId)
+        .animation(.easeInOut(duration: 0.6), value: item?.id)
     }
 }
 
@@ -211,6 +255,8 @@ private struct QueueSection: View {
                 PillToggle(systemImage: "shuffle", isOn: player.shuffle) { player.toggleShuffle() }
                 PillToggle(systemImage: player.repeatMode == .one ? "repeat.1" : "repeat",
                            isOn: player.repeatMode != .off) { player.cycleRepeat() }
+                // Autoplay: keep going with similar songs when the queue ends.
+                PillToggle(systemImage: "infinity", isOn: player.autoplay) { player.autoplay.toggle() }
             }
             .padding(.top, 16)
 
@@ -224,7 +270,7 @@ private struct QueueSection: View {
             List {
                 ForEach(Array(upNext.enumerated()), id: \.offset) { i, track in
                     HStack(spacing: 12) {
-                        ArtworkView(track: track, size: 44, cornerRadius: 6)
+                        ArtworkView(item: track, size: 44, cornerRadius: 6)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(track.title).font(.subheadline).lineLimit(1)
                             Text(track.artist).font(.caption).foregroundStyle(.white.opacity(0.5)).lineLimit(1)
@@ -337,10 +383,16 @@ private struct TransportControls: View {
             }
             Spacer()
             Button { player.togglePlayPause() } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 50))
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 80, height: 70)
+                Group {
+                    if player.isPlaying && player.isBuffering {
+                        ProgressView().controlSize(.large).tint(.white)
+                    } else {
+                        Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 50))
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                }
+                .frame(width: 80, height: 70)
             }
             Spacer()
             Button { player.next() } label: {
